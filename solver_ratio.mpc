@@ -1,0 +1,89 @@
+number_of_users = 2
+number_of_params = 5 # type, type, ratioh, ratiow, limit
+intent = sint.Matrix(number_of_users, number_of_params)
+
+# a fake ptx is just a bunch of random field elements
+# each user sends a ptx along with their intent
+ptx_size = 28 # approximate size of a partial transaction 
+ptxs = sint.Matrix(number_of_users, ptx_size)
+
+# read user inputs
+@for_range(number_of_users)
+def _(i):
+    
+    @for_range(number_of_params)
+    def _(j):
+        intent[i][j] = sint.get_input_from(i)
+    
+    @for_range(ptx_size)
+    def _(j):
+        ptxs[i][j] = sint.get_input_from(i)
+
+ratio = Array(4, sint)
+ratio[0] = intent[0][2]
+ratio[1] = intent[0][3]
+ratio[2] = intent[1][2]
+ratio[3] = intent[1][3]
+
+# solver strategy
+
+def check_type(h1, w1, h2, w2):
+    return (h1 == w2) & (h2 == w1)
+
+def check_ratio(h1, w1, h2, w2):
+    return (h1 == w2) & (h2 >= w1)
+
+# if h1 != w2, need to convert ratios to have a common base to make them comparable 
+# to avoid branching, do conversion even if h1 == w2
+# to avoid using gcd (remainder computation is not implemented in MP-SPDZ), just use h1 * w2 instead of lcm(h1, w2)
+common = ratio[0] * ratio[3]
+conversion_value1 = ratio[3]
+conversion_value2 = ratio[0]
+
+ratio[0] = common
+ratio[1] = ratio[1] * conversion_value1
+ratio[2] = ratio[2] * conversion_value2
+ratio[3] = common
+
+# 3. determine values to be exchanged
+
+# WARNING: division overflow
+# as this computation involves at least euclidean division (if instead of computing real values we limit them to be integers only) 
+# and we can't compute remainders in a field using MP-SPDZ,
+# x and y might overflow depending on the exact combination of parameters
+# such situation should be prevented in real life as it will produce wrong values for x and y,
+# but I can't be bothered trying to hack around this (after a few hours of being bothered)
+
+w = (intent[0][4] * ratio[2]).min(intent[1][4] * ratio[0])
+x = w / ratio[2]
+y = w / ratio[0]
+
+# 4. compute the transaction params
+# Compute the amounts left
+
+leftover1 = intent[0][4] - x
+leftover2 = intent[1][4] - y
+
+# 5. Perform the checks and produce the transaction parameters (no actual ptx are computed here)
+
+intents_compatibility = check_ratio(*ratio) & check_type(intent[0][0], intent[0][1], intent[1][0], intent[1][1])
+
+extra_ptx = Array(4, sint)
+extra_ptx[0] = x
+extra_ptx[1] = y
+extra_ptx[2] = leftover1
+extra_ptx[3] = leftover2
+
+output = ptxs, extra_ptx
+
+@if_e(intents_compatibility.reveal())
+def _():
+        print_ln('Intents are real')
+        print_ln('U1 limit: %s, sends %s and has %s left', intent[0][4].reveal(), x.reveal(), leftover1.reveal())
+        print_ln('U2 limit: %s, sends %s and has %s left', intent[1][4].reveal(), y.reveal(), leftover2.reveal())
+@else_
+def _():
+        print_ln("Intents aren't real")
+
+
+
